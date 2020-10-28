@@ -14,6 +14,7 @@ import net.corda.core.schemas.PersistentState
 import net.corda.core.schemas.QueryableState
 import net.corda.core.transactions.LedgerTransaction
 import net.corda.core.transactions.TransactionBuilder
+import net.corda.core.utilities.OpaqueBytes
 import net.corda.finance.contracts.utils.sumCash
 import net.corda.finance.contracts.utils.sumCashOrNull
 import net.corda.finance.contracts.utils.sumCashOrZero
@@ -54,6 +55,11 @@ class Cash : OnLedgerAsset<Currency, Cash.Commands, Cash.State>() {
     ) : FungibleAsset<Currency>, QueryableState {
         constructor(deposit: PartyAndReference, amount: Amount<Currency>, owner: AbstractParty)
                 : this(Amount(amount.quantity, Issued(deposit, amount.token)), owner)
+
+        constructor(entity: CashSchemaV1.PersistentCashState) :
+                this(PartyAndReference(entity.owner!!, OpaqueBytes(entity.issuerRef)),
+                        Amount(entity.pennies, Currency.getInstance(entity.currency)),
+                        entity.owner!!)
 
         override val exitKeys = setOf(owner.owningKey, amount.token.issuer.party.owningKey)
         override val participants = listOf(owner)

@@ -379,16 +379,10 @@ interface VaultService {
                                                                 contractStateType: Class<out T>): List<StateAndRef<T>>
 
     @Throws(VaultQueryException::class)
-    fun <T : Any> _queryByHql(resultClass: Class<out T>, hql: String): List<T>
-
-    @Throws(VaultQueryException::class)
-    fun _queryComponent(txId: SecureHash, componentGroupEnum: ComponentGroupEnum, componentGroupLeafIndex: Int): Any
-
-    @Throws(VaultQueryException::class)
-    fun <T : ContractState> _queryBySql(contractStateType: Class<out T>, sql: String): String
-
-    @Throws(VaultQueryException::class)
-    fun <T : ContractState> _queryBySql(contractStateType: Class<out T>, sql: String, paging_: PageSpecification): String
+    fun <T : Any> _queryByJpql(resultClass: Class<out T>,
+                               jpqlString: String,
+                               namedParameters: List<Pair<String, String>>?,
+                               paging: PageSpecification): List<T>
 
     // DOCSTART VaultQueryAPI
     /**
@@ -440,8 +434,20 @@ interface VaultService {
 
     // Note: cannot apply @JvmOverloads to interfaces nor interface implementations.
     // Java Helpers.
-    fun <T : Any> queryByHql(resultClass: Class<out T>, hql: String): List<T> {
-        return _queryByHql(resultClass, hql)
+    fun <T : Any> queryByJpql(resultClass: Class<out T>, jpqlString: String): List<T> {
+        return _queryByJpql(resultClass, jpqlString, null, PageSpecification())
+    }
+
+    fun <T : Any> queryByJpql(resultClass: Class<out T>, jpqlString: String, namedParameters: List<Pair<String, String>>?): List<T> {
+        return _queryByJpql(resultClass, jpqlString, namedParameters, PageSpecification())
+    }
+
+    fun <T : Any> queryByJpql(resultClass: Class<out T>, jpqlString: String, paging: PageSpecification): List<T> {
+        return _queryByJpql(resultClass, jpqlString, null, PageSpecification())
+    }
+
+    fun <T : Any> queryByJpql(resultClass: Class<out T>, jpqlString: String, namedParameters: List<Pair<String, String>>?, paging: PageSpecification): List<T> {
+        return _queryByJpql(resultClass, jpqlString, namedParameters, PageSpecification())
     }
 
     fun <T : ContractState> queryBy(contractStateType: Class<out T>): Vault.Page<T> {
@@ -517,12 +523,20 @@ inline fun <reified T : ContractState> VaultService.queryBy(criteria: QueryCrite
     return _queryBy(criteria, paging, sorting, T::class.java)
 }
 
-inline fun <reified T : Any> VaultService.queryByHql(hql: String): List<T> {
-    return _queryByHql(T::class.java, hql)
+inline fun <reified T : Any> VaultService.queryByJpql(jpqlString: String): List<T>{
+    return _queryByJpql(T::class.java, jpqlString, null, PageSpecification())
 }
 
-inline fun VaultService.queryComponent(txId: SecureHash, componentGroupEnum: ComponentGroupEnum, componentGroupLeafIndex: Int): Any {
-    return _queryComponent(txId, componentGroupEnum, componentGroupLeafIndex)
+inline fun <reified T : Any> VaultService.queryByJpql(jpqlString: String, namedParameters: List<Pair<String, String>>?): List<T>{
+    return _queryByJpql(T::class.java, jpqlString, namedParameters, PageSpecification())
+}
+
+inline fun <reified T : Any> VaultService.queryByJpql(jpqlString: String, paging: PageSpecification): List<T>{
+    return _queryByJpql(T::class.java, jpqlString, null, paging)
+}
+
+inline fun <reified T : Any> VaultService.queryByJpql(jpqlString: String, namedParameters: List<Pair<String, String>>?, paging: PageSpecification): List<T>{
+    return _queryByJpql(T::class.java, jpqlString, namedParameters, paging)
 }
 
 inline fun <reified T : ContractState> VaultService.trackBy(): DataFeed<Vault.Page<T>, Vault.Update<T>> {

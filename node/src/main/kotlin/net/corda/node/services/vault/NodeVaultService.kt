@@ -4,9 +4,6 @@ import co.paralleluniverse.fibers.Suspendable
 import co.paralleluniverse.strands.Strand
 import net.corda.core.CordaRuntimeException
 import net.corda.core.contracts.Amount
-import net.corda.core.contracts.Command
-import net.corda.core.contracts.CommandData
-import net.corda.core.contracts.ComponentGroupEnum
 import net.corda.core.contracts.ContractState
 import net.corda.core.contracts.FungibleAsset
 import net.corda.core.contracts.FungibleState
@@ -14,17 +11,14 @@ import net.corda.core.contracts.Issued
 import net.corda.core.contracts.OwnableState
 import net.corda.core.contracts.StateAndRef
 import net.corda.core.contracts.StateRef
-import net.corda.core.contracts.TimeWindow
 import net.corda.core.contracts.TransactionState
 import net.corda.core.crypto.SecureHash
 import net.corda.core.crypto.containsAny
 import net.corda.core.flows.HospitalizeFlowException
-import net.corda.core.identity.Party
 import net.corda.core.internal.ThreadBox
 import net.corda.core.internal.TransactionDeserialisationException
 import net.corda.core.internal.VisibleForTesting
 import net.corda.core.internal.bufferUntilSubscribed
-import net.corda.core.internal.deserialiseComponentGroup
 import net.corda.core.internal.tee
 import net.corda.core.internal.uncheckedCast
 import net.corda.core.messaging.DataFeed
@@ -48,8 +42,6 @@ import net.corda.core.node.services.vault.builder
 import net.corda.core.observable.internal.OnResilientSubscribe
 import net.corda.core.schemas.PersistentStateRef
 import net.corda.core.serialization.SingletonSerializeAsToken
-import net.corda.core.serialization.deserialize
-import net.corda.core.transactions.ComponentGroup
 import net.corda.core.transactions.ContractUpgradeWireTransaction
 import net.corda.core.transactions.CoreTransaction
 import net.corda.core.transactions.FullTransaction
@@ -64,8 +56,6 @@ import net.corda.core.utilities.toNonEmptySet
 import net.corda.core.utilities.trace
 import net.corda.node.services.api.SchemaService
 import net.corda.node.services.api.VaultServiceInternal
-import net.corda.node.services.persistence.DBTransactionStorage
-import net.corda.node.services.persistence.DBTransactionStorage.*
 import net.corda.node.services.schema.PersistentStateService
 import net.corda.node.services.statemachine.FlowStateMachineImpl
 import net.corda.nodeapi.internal.persistence.CordaPersistence
@@ -74,13 +64,9 @@ import net.corda.nodeapi.internal.persistence.contextTransactionOrNull
 import net.corda.nodeapi.internal.persistence.currentDBSession
 import net.corda.nodeapi.internal.persistence.wrapWithDatabaseTransaction
 import org.hibernate.Session
-import org.hibernate.engine.internal.StatefulPersistenceContext
-import org.hibernate.engine.spi.EntityKey
-import org.hibernate.engine.spi.SessionImplementor
 import rx.Observable
 import rx.exceptions.OnErrorNotImplementedException
 import rx.subjects.PublishSubject
-import java.lang.reflect.Field
 import java.security.PublicKey
 import java.sql.SQLException
 import java.time.Clock
@@ -701,80 +687,45 @@ class NodeVaultService(
     }
 
     @Throws(VaultQueryException::class)
-    override fun <T : ContractState> _queryBySql(contractStateType: Class<out T>,
-                                                 sql: String): String {
-        return _queryBySql(contractStateType, sql, PageSpecification())
-    }
-
-    @Throws(VaultQueryException::class)
-    override fun <T : ContractState> _queryBySql(contractStateType: Class<out T>,
-                                                 sql: String,
-                                                 paging_: PageSpecification): String {
-        log.info("Vault Query for contract type $contractStateType and SQL string: $sql")
-
+    override fun <T : Any> _queryByJpql(resultClass: Class<out T>, jpqlString: String, namedParameters: List<Pair<String, String>>?,
+                                        paging: PageSpecification): List<T> {
         return database.transaction {
-            // todo conal
-
-            var query = entityManager.createNativeQuery(sql)
-//            dumpHibernateSession(session)
-//            dumpHibernateSession(entityManager)
-
-            val results = query.resultList
-            println("results size: ${results.size}")
-            println("results: $results")
-            results.toString()
-
-        }
-    }
-
-    override fun _queryComponent(txId: SecureHash, componentGroupEnum: ComponentGroupEnum, componentGroupLeafIndex: Int): Any {
-        log.info("Vault Query for $componentGroupEnum with txId ${txId.toString()} and componentGroupLeafIndex $componentGroupLeafIndex")
-        return database.transaction {
-            //todo conal
-            var query = session.createQuery(
-                    "from ${DBTransactionComponent::class.java.name} " +
-                            "where tx_id = :txId and component_group_index = :componentGroupIndex and component_group_leaf_index = :componentIndex",
-                    DBTransactionComponent::class.java)
-                    .setParameter("txId", txId.toString())
-                    .setParameter("componentGroupIndex", componentGroupEnum.name)
-                    .setParameter("componentIndex", componentGroupLeafIndex)
-
-            try {
-                val singleResult = query.singleResult
-                if(singleResult is DBTransactionComponent){
-                    when(componentGroupEnum){
-                        ComponentGroupEnum.INPUTS_GROUP -> singleResult.data.deserialize<StateRef>()
-                        ComponentGroupEnum.OUTPUTS_GROUP -> singleResult.data.deserialize<TransactionState<ContractState>>()
-                        ComponentGroupEnum.COMMANDS_GROUP -> singleResult.data.deserialize<Command<CommandData>>()
-                        ComponentGroupEnum.ATTACHMENTS_GROUP -> singleResult.data.deserialize<SecureHash>()
-                        ComponentGroupEnum.NOTARY_GROUP -> singleResult.data.deserialize<Party>()
-                        ComponentGroupEnum.TIMEWINDOW_GROUP -> singleResult.data.deserialize<TimeWindow>()
-                        ComponentGroupEnum.SIGNERS_GROUP -> throw Exception("Use COMMANDS_GROUP instead")
-                        ComponentGroupEnum.REFERENCES_GROUP -> singleResult.data.deserialize<StateRef>()
-                        ComponentGroupEnum.PARAMETERS_GROUP -> singleResult.data.deserialize<SecureHash>()
-                    }
-                }
-            } catch (e: Exception) {
-                log.error(e.message, e)
-                throw e
+            // pagination checks
+            val validatedPaging = if (paging.pageSize == Integer.MAX_VALUE) {
+                paging.copy(pageSize = Integer.MAX_VALUE - 1)
+            } else {
+                paging
             }
-        }
-    }
+            if (!validatedPaging.isDefault) {
+                // pagination
+                if (validatedPaging.pageNumber < DEFAULT_PAGE_NUM) throw VaultQueryException("Page specification: invalid page number ${validatedPaging.pageNumber} [page numbers start from $DEFAULT_PAGE_NUM]")
+                if (validatedPaging.pageSize < 1) throw VaultQueryException("Page specification: invalid page size ${validatedPaging.pageSize} [minimum is 1]")
+                if (validatedPaging.pageSize > MAX_PAGE_SIZE) throw VaultQueryException("Page specification: invalid page size ${validatedPaging.pageSize} [maximum is $MAX_PAGE_SIZE]")
+            }
 
-    @Throws(VaultQueryException::class)
-    override fun <T : Any> _queryByHql(resultClass: Class<out T>, hql: String): List<T> {
-        log.info("Vault Query for result type $resultClass and HQL string: $hql")
-        return database.transaction {
-            var query = entityManager.createQuery(hql, resultClass)
+            var query = entityManager.createQuery(jpqlString, resultClass)
+
+            if(namedParameters != null) {
+                while (namedParameters.iterator().hasNext()) {
+                    val next = namedParameters.iterator().next()
+                    query.setParameter(next.first, next.second)
+                }
+            }
+
+            query.firstResult = maxOf(0, (paging.pageNumber - 1) * paging.pageSize)
+            val pageSize = paging.pageSize + 1
+            query.maxResults = if (pageSize > 0) pageSize else Integer.MAX_VALUE // detection too many results, protected against overflow
+
+            log.info("Executing Vault Query by JPQL for result type $resultClass, JPQL string: $jpqlString, parameters: $namedParameters, paging: $paging")
 
             try {
                 val results = query.resultList
-                println("results size: ${results.size}")
-                println("results: $results")
+                log.info("JPQL query successfully executed and obtained resultSet of size: ${results.size}")
+                log.info("Results: $results")
                 results
             } catch (e: Exception) {
-                log.error(e.message, e)
-                throw e
+                log.error("An error occurred when executing JPQL query against the Vault", e)
+                throw VaultQueryException("An error occurred when executing JPQL query against the Vault", e)
             }
         }
     }

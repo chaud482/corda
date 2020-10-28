@@ -145,11 +145,10 @@ interface CordaRPCOps : RPCOps {
     // DOCSTART VaultQueryAPIHelpers
     fun <T : ContractState> vaultQuery(contractStateType: Class<out T>): Vault.Page<T>
 
-    fun queryComponent(txId: String, componentGroupType: Int, componentGroupLeafIndex: Int): Any
-
-    fun <T : Any> vaultQueryByHql(resultClass: Class<out T>, hql: String): List<T>
-
-    fun <T : ContractState> vaultQueryBySql(contractStateType: Class<out T>, sql: String): String
+    fun <T : Any> vaultQueryByJpql(resultClass: Class<out T>,
+                                   jpqlString: String,
+                                   namedParameters: List<Pair<String, String>>?,
+                                   paging: PageSpecification): List<T>
 
     fun <T : ContractState> vaultQueryByCriteria(criteria: QueryCriteria, contractStateType: Class<out T>): Vault.Page<T>
 
@@ -546,6 +545,13 @@ inline fun <reified T : ContractState> CordaRPCOps.vaultQueryBy(criteria: QueryC
                                                                 paging: PageSpecification = PageSpecification(),
                                                                 sorting: Sort = Sort(emptySet())): Vault.Page<T> {
     return vaultQueryBy(criteria, paging, sorting, T::class.java)
+}
+
+inline fun <reified T : Any> CordaRPCOps.vaultQueryByJpql(resultClass: Class<out T>,
+                                                          jpqlString: String,
+                                                          namedParameters: List<Pair<String, String>>? = null,
+                                                          paging: PageSpecification = PageSpecification()): List<T> {
+    return vaultQueryByJpql(resultClass, jpqlString, namedParameters, paging)
 }
 
 inline fun <reified T : ContractState> CordaRPCOps.vaultTrackBy(criteria: QueryCriteria = QueryCriteria.VaultQueryCriteria(),

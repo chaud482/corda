@@ -117,7 +117,9 @@ class DBTransactionStorage(private val database: CordaPersistence, cacheFactory:
 
             /** The serialized data of this component */
             @Type(type = "corda-blob")
+//            @Type(type = "serialised-component-data-type")
             @Column(name = "data", nullable = false)
+//            @Convert(converter = ComponentDataConverter::class)
             val data: ByteArray,
 
             @OneToOne(cascade = [CascadeType.ALL])
@@ -128,7 +130,40 @@ class DBTransactionStorage(private val database: CordaPersistence, cacheFactory:
                         JoinColumn(name = "owning_component_group_leaf_index", referencedColumnName = "component_group_leaf_index")
                     ])
             var referenced: DBTransactionComponent? = null
-    )
+    ){
+        val deserialisedData: Any
+            get() = deserialiseComponent(this.data, this.transactionComponentId.componentGroupIndex)
+
+
+        fun deserialiseComponent(data: ByteArray, group: ComponentGroupEnum): Any {
+            return data.let {
+                when (group) {
+                    ComponentGroupEnum.INPUTS_GROUP -> it.deserialize<StateRef>()
+                    ComponentGroupEnum.OUTPUTS_GROUP -> it.deserialize<TransactionState<ContractState>>()
+                    ComponentGroupEnum.COMMANDS_GROUP -> it.deserialize<CommandData>()
+                    ComponentGroupEnum.ATTACHMENTS_GROUP -> it.deserialize<SecureHash>()
+                    ComponentGroupEnum.NOTARY_GROUP -> it.deserialize<Party>()
+                    ComponentGroupEnum.TIMEWINDOW_GROUP -> it.deserialize<TimeWindow>()
+                    ComponentGroupEnum.SIGNERS_GROUP -> it.deserialize<List<PublicKey>>()
+                    ComponentGroupEnum.REFERENCES_GROUP -> it.deserialize<StateRef>()
+                    ComponentGroupEnum.PARAMETERS_GROUP -> it.deserialize<SecureHash>()
+                    ComponentGroupEnum.PRIVACY_SALT -> it.deserialize<PrivacySalt>()
+                }
+            }
+        }
+    }
+
+    // A tweaked version of `org.hibernate.type.WrapperBinaryType` that deals with ByteArray (java primitive byte[] type).
+    /*object SerialisedComponentDataType : AbstractSingleColumnStandardBasicType<ByteArray>(VarbinaryTypeDescriptor.INSTANCE, PrimitiveByteArrayTypeDescriptor.INSTANCE) {
+        override fun getRegistrationKeys(): Array<String> {
+            return arrayOf(name, "ByteArray", ByteArray::class.java.name)
+        }
+
+        override fun getName(): String {
+            return "corda-wrapper-binary"
+        }
+    }*/
+
 
     @Embeddable
     @CordaSerializable
@@ -209,6 +244,17 @@ class DBTransactionStorage(private val database: CordaPersistence, cacheFactory:
             @CollectionTable(name = "transaction_command_signer", joinColumns = [(JoinColumn(name = "command_id", referencedColumnName = "id"))])
             var signers: List<PublicKey>? = null
     ): Serializable
+
+/*    @Converter
+    class ComponentDataConverter : AttributeConverter<Any, ByteArray> {
+        override fun convertToDatabaseColumn(attribute: TransactionStatus): ByteArray {
+            return attribute.toDatabaseValue()
+        }
+
+        override fun convertToEntityAttribute(dbData: ByteArray): TransactionStatus {
+            return TransactionStatus.fromDatabaseValue(dbData)
+        }
+    }*/
 
     @Converter
     class TransactionStatusConverter : AttributeConverter<TransactionStatus, String> {

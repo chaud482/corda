@@ -6,7 +6,6 @@ import net.corda.core.CordaRuntimeException
 import net.corda.core.concurrent.CordaFuture
 import net.corda.core.context.InvocationContext
 import net.corda.core.context.InvocationOrigin
-import net.corda.core.contracts.ComponentGroupEnum
 import net.corda.core.contracts.ContractState
 import net.corda.core.cordapp.Cordapp
 import net.corda.core.cordapp.CordappInfo
@@ -122,32 +121,11 @@ internal class CordaRPCOpsImpl(
         return services.networkMapCache.track()
     }
 
-    override fun queryComponent(txId: String, componentGroupType: Int, componentGroupLeafIndex: Int): Any {
-        logger.info("Conal - query by hql starting")
-        if(componentGroupType > ComponentGroupEnum.values().size){
-            throw Exception("ComponentGroupType must be within max size of 0 - ${ComponentGroupEnum.values().size}")
-        }
-        val secureHash = try {
-            SecureHash.parse(txId)
-        } catch (e: Exception){
-            logger.error(e.message, e)
-        }
-        return services.vaultService._queryComponent(
-                secureHash as SecureHash,
-                ComponentGroupEnum.values()[componentGroupType],
-                componentGroupLeafIndex)
-    }
-
-    override fun <T : Any> vaultQueryByHql(resultClass: Class<out T>, hql: String): List<T> {
-
-        logger.info("Conal - query by hql starting")
-        return services.vaultService._queryByHql(resultClass, hql)
-    }
-
-    override fun <T : ContractState> vaultQueryBySql(contractStateType: Class<out T>, sql: String): String {
-
-        logger.info("Conal - query by sql starting")
-        return services.vaultService._queryBySql(contractStateType, sql)
+    override fun <T : Any> vaultQueryByJpql(resultClass: Class<out T>, jpqlString: String, namedParameters: List<Pair<String, String>>?,
+                                            paging: PageSpecification): List<T>{
+        logger.info("Vault Query By JPQL initiated from RPC")
+        resultClass.checkIsA<Any>()
+        return services.vaultService._queryByJpql(resultClass, jpqlString, namedParameters, paging)
     }
 
     override fun <T : ContractState> vaultQueryBy(criteria: QueryCriteria,

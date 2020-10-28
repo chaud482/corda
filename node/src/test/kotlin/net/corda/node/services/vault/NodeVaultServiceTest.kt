@@ -11,6 +11,7 @@ import net.corda.core.crypto.generateKeyPair
 import net.corda.core.identity.*
 import net.corda.core.internal.NotaryChangeTransactionBuilder
 import net.corda.core.internal.packageName
+import net.corda.core.internal.sumByLong
 import net.corda.core.node.NotaryInfo
 import net.corda.core.node.StatesToRecord
 import net.corda.core.node.services.*
@@ -212,28 +213,33 @@ class NodeVaultServiceTest {
     }
 
     @Test(timeout=300_000)
-	fun `query by JPQL gets components`() {
-        database.transaction {
-            vaultFiller.fillWithSomeTestCash(100.DOLLARS, issuerServices, 3, DUMMY_CASH_ISSUER)
+	fun `query by JPQL`() {
+        val owner = services.myInfo.singleIdentity()
+        val numberOfStates = 3
+        val vault = database.transaction {
+            var fillWithSomeTestCash = vaultFiller.fillWithSomeTestCash(100.DOLLARS, issuerServices, numberOfStates, DUMMY_CASH_ISSUER, owner,
+                    statesToRecord = StatesToRecord.ALL_VISIBLE)
+            fillWithSomeTestCash
         }
         database.transaction {
-            var allComponents = vaultService.queryByHql<DBTransactionStorage.DBTransactionComponent>(
-                    "from ${DBTransactionStorage.DBTransactionComponent::class.java.name}")
-            assertTrue(allComponents.isNotEmpty())
+            assertNotNull(vault.states)
+            assertTrue(vault.states.iterator().hasNext())
+            val txId = vault.states.first().ref.txhash.toString()
+            assertNotNull(txId)
 
-//            var component = vaultService.queryComponent()(
-//                    "from ${DBTransactionStorage.DBTransactionComponent::class.java.name}")
-//            assertTrue(allComponents.isNotEmpty())
+            var allVaultStates = vaultService.queryByJpql<VaultSchemaV1.VaultStates>(
+                    "from ${VaultSchemaV1.VaultStates::class.java.name}")
 
-            // todo - we need an actual tx id...
-            /*var firstInput = vaultService.queryByHql<DBTransactionStorage.DBTransactionComponent>(
-                    "select c from ${DBTransactionStorage.DBTransactionComponent::class.java.name} c " +
-                            "where c.tx_id = ${.txHash.toString()} " +
-                            "and c.component_group_index = ${ComponentGroupEnum.INPUTS_GROUP} " +
-                            "and c.component_group_leaf_index = ${stateRef.index}")*/
+            assertNotNull(allVaultStates)
+            assertEquals(numberOfStates, allVaultStates.size)
 
-//            var count = vaultService.queryByHql<Cash.State>("select count(v) from ${VaultSchemaV1.VaultStates::class.java.name} v")
-//            assertThat(count.otherResults[0]).isEqualTo(3L)
+            var cashState = vaultService.queryByJpql<Cash.State>(
+                    "select new ${Cash.State::class.java.name}(entity) " +
+                            "from ${CashSchemaV1.PersistentCashState::class.java.name} entity " +
+                            "where entity.owner = '${owner.name}'")
+
+            assertEquals(numberOfStates, cashState.size)
+            assertEquals(10000L, cashState.sumByLong { it.amount.quantity })
         }
     }
 

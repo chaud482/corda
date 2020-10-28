@@ -5,6 +5,7 @@ import net.corda.client.rpc.PermissionException
 import net.corda.core.context.AuthServiceId
 import net.corda.core.context.InvocationContext
 import net.corda.core.contracts.Amount
+import net.corda.core.contracts.ComponentGroupEnum
 import net.corda.core.contracts.ContractState
 import net.corda.core.contracts.Issued
 import net.corda.core.crypto.SecureHash
@@ -23,9 +24,11 @@ import net.corda.core.messaging.vaultQueryBy
 import net.corda.core.messaging.vaultTrackBy
 import net.corda.core.node.services.Vault
 import net.corda.core.node.services.queryBy
+import net.corda.core.node.services.queryByJpql
 import net.corda.core.node.services.vault.AttachmentQueryCriteria
 import net.corda.core.node.services.vault.ColumnPredicate
 import net.corda.core.node.services.vault.EqualityComparisonOperator
+import net.corda.core.node.services.vault.PageSpecification
 import net.corda.core.transactions.SignedTransaction
 import net.corda.core.utilities.OpaqueBytes
 import net.corda.core.utilities.getOrThrow
@@ -34,12 +37,15 @@ import net.corda.finance.GBP
 import net.corda.finance.contracts.asset.Cash
 import net.corda.finance.flows.CashIssueFlow
 import net.corda.finance.flows.CashPaymentFlow
+import net.corda.finance.schemas.CashSchemaV1
 import net.corda.node.internal.security.AuthorizingSubject
 import net.corda.node.internal.security.RPCSecurityManagerImpl
 import net.corda.node.services.Permissions.Companion.invokeRpc
 import net.corda.node.services.Permissions.Companion.startFlow
+import net.corda.node.services.persistence.DBTransactionStorage
 import net.corda.node.services.rpc.CURRENT_RPC_CONTEXT
 import net.corda.node.services.rpc.RpcAuthContext
+import net.corda.node.services.vault.VaultSchemaV1
 import net.corda.nodeapi.exceptions.MissingAttachmentException
 import net.corda.nodeapi.exceptions.NonRpcFlowException
 import net.corda.nodeapi.internal.config.User
@@ -65,7 +71,6 @@ import rx.Observable
 import java.io.ByteArrayOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -172,15 +177,14 @@ class CordaRPCOpsImplTest {
             }
         }
     }
-/*
 
     @Test(timeout=300_000)
-	fun `query by hql`() {
+	fun `query by jpql`() {
         CURRENT_RPC_CONTEXT.set(RpcAuthContext(InvocationContext.rpc(testActor()), buildSubject("TEST_USER", emptySet())))
         withPermissions(
                 invokeRpc("vaultTrackBy"),
                 invokeRpc("vaultQueryBy"),
-                invokeRpc("vaultQueryByHql"),
+                invokeRpc("vaultQueryByJpql"),
                 invokeRpc(CordaRPCOps::stateMachinesFeed),
                 startFlow<CashIssueFlow>()
         ) {
@@ -191,11 +195,6 @@ class CordaRPCOpsImplTest {
 
             val quantity = 1000L
             val ref = OpaqueBytes(ByteArray(1) { 1 })
-
-            // Check the monitoring service wallet is empty
-            aliceNode.database.transaction {
-                assertFalse(aliceNode.services.vaultService.queryBy<ContractState>().totalStatesAvailable > 0)
-            }
 
             // Tell the monitoring service node to issue some cash
             val result = rpc.startFlow(::CashIssueFlow, Amount(quantity, GBP), ref, notary)
@@ -219,18 +218,11 @@ class CordaRPCOpsImplTest {
                     Issued(alice.ref(ref), GBP)),
                     anonymisedRecipient)
 
-            // Query vault via RPC using HQL
-//            val cash = rpc.vaultQueryByHql<Cash.State>(Cash.State::class.java, "Select v from net.corda.node.services.vault.VaultSchemaV1.VaultStates v")
-
-//            val cash = rpc.vaultQueryByHql<Cash.State>(Cash.State::class.java,
-//                    """Select tx
-//                            from ${VaultSchemaV1.VaultStates::class.java.name} v
-//                            join ${DBTransactionStorage.DBTransaction::class.java.name} tx on v.stateRef.txId = tx.txId""".trimIndent())
-
-            val cash = rpc.vaultQueryByHql<Long>(Long::class.java, "Select count(v) from net.corda.node.services.vault.VaultSchemaV1.VaultStates v")
-
-            println(cash)
-            assertNotNull(cash)
+            var cashState = rpc.vaultQueryByJpql(Cash.State::class.java,
+                    "select new ${Cash.State::class.java.name}(entity) " +
+                            "from ${CashSchemaV1.PersistentCashState::class.java.name} entity " +
+                            "where entity.owner = '${anonymisedRecipient}'", null, PageSpecification())
+            assertEquals(expectedState, cashState.first())
 
             vaultTrackCash.expectEvents {
                 expect { update ->
@@ -240,66 +232,6 @@ class CordaRPCOpsImplTest {
             }
         }
     }
-
-    @Test(timeout=300_000)
-	fun `query by sql`() {
-        CURRENT_RPC_CONTEXT.set(RpcAuthContext(InvocationContext.rpc(testActor()), buildSubject("TEST_USER", emptySet())))
-        withPermissions(
-                invokeRpc("vaultTrackBy"),
-                invokeRpc("vaultQueryBy"),
-                invokeRpc("vaultQueryBySql"),
-                invokeRpc(CordaRPCOps::stateMachinesFeed),
-                startFlow<CashIssueFlow>()
-        ) {
-            aliceNode.database.transaction {
-                stateMachineUpdates = rpc.stateMachinesFeed().updates
-                vaultTrackCash = rpc.vaultTrackBy<Cash.State>().updates
-            }
-
-            val quantity = 1000L
-            val ref = OpaqueBytes(ByteArray(1) { 1 })
-
-            // Check the monitoring service wallet is empty
-            aliceNode.database.transaction {
-                assertFalse(aliceNode.services.vaultService.queryBy<ContractState>().totalStatesAvailable > 0)
-            }
-
-            // Tell the monitoring service node to issue some cash
-            val result = rpc.startFlow(::CashIssueFlow, Amount(quantity, GBP), ref, notary)
-            mockNet.runNetwork()
-
-            var issueSmId: StateMachineRunId? = null
-            stateMachineUpdates.expectEvents {
-                sequence(
-                        // ISSUE
-                        expect { add: StateMachineUpdate.Added ->
-                            issueSmId = add.id
-                        },
-                        expect { remove: StateMachineUpdate.Removed ->
-                            require(remove.id == issueSmId)
-                        }
-                )
-            }
-
-            val anonymisedRecipient = result.returnValue.getOrThrow().recipient!!
-            val expectedState = Cash.State(Amount(quantity,
-                    Issued(alice.ref(ref), GBP)),
-                    anonymisedRecipient)
-
-            // Query vault via RPC using HQL
-            val cash = rpc.vaultQueryBySql<Cash.State>(Cash.State::class.java, "Select * from vault_states")
-            println(cash)
-            assertNotNull(cash)
-
-            vaultTrackCash.expectEvents {
-                expect { update ->
-                    val actual = update.produced.single().state.data
-                    assertEquals(expectedState, actual)
-                }
-            }
-        }
-    }
-*/
 
     @Test(timeout=300_000)
     @Suppress("DEPRECATION")
