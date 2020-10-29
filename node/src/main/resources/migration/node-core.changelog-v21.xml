@@ -1,0 +1,119 @@
+<?xml version="1.1" encoding="UTF-8" standalone="no"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd"
+                   logicalFilePath="migration/node-services.changelog-init.xml">
+
+    <changeSet author="R3.Corda" id="add_transaction_component_tables">
+        <createTable tableName="transaction_component">
+            <column name="tx_id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="component_group_index" type="NVARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="component_group_leaf_index" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="data" type="blob">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey columnNames="tx_id, component_group_index, component_group_leaf_index"
+                       constraintName="pk_tx_id_component_group_index_component_group_leaf_index"
+                       tableName="transaction_component"/>
+
+
+        <createTable tableName="transaction_command">
+            <column name="id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="tx_id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="command_data" type="blob">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey columnNames="id" constraintName="pk_id" tableName="transaction_command"/>
+
+
+        <createTable tableName="transaction_command_signer">
+            <column name="command_id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="signer" type="NVARCHAR(1024)"/>
+        </createTable>
+        <addForeignKeyConstraint baseColumnNames="command_id"
+                                 baseTableName="transaction_command_signer"
+                                 constraintName="FK__tx_cmd_signer__transaction_command"
+                                 referencedColumnNames="id"
+                                 referencedTableName="transaction_command"/>
+
+
+        <createTable tableName="transaction_component_referenced_by_stateref">
+            <column name="owning_tx_id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="owning_component_group_index" type="NVARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="owning_component_group_leaf_index" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="referenced_tx_id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="referenced_component_group_index" type="NVARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="referenced_component_group_leaf_index" type="INT">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint columnNames="owning_tx_id, owning_component_group_index, owning_component_group_leaf_index"
+                             constraintName="unique_owning_tx_id_component_group_index_component_group_leaf_index"
+                             tableName="transaction_component_referenced_by_stateref"/>
+        <addForeignKeyConstraint baseColumnNames="owning_tx_id, owning_component_group_index, owning_component_group_leaf_index"
+                                 baseTableName="transaction_component_referenced_by_stateref"
+                                 constraintName="FK__owning_tx_ref_by_stateref__transaction_component"
+                                 referencedColumnNames="tx_id, component_group_index, component_group_leaf_index"
+                                 referencedTableName="transaction_component"/>
+        <addForeignKeyConstraint baseColumnNames="referenced_tx_id, referenced_component_group_index, referenced_component_group_leaf_index"
+                                 baseTableName="transaction_component_referenced_by_stateref"
+                                 constraintName="FK__referenced_tx_ref_by_stateref__transaction_component"
+                                 referencedColumnNames="tx_id, component_group_index, component_group_leaf_index"
+                                 referencedTableName="transaction_component"/>
+
+
+        <createTable tableName="transaction_signature">
+            <column name="id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="tx_id" type="NVARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="by" type="NVARCHAR(1024)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="signature" type="blob">
+                <constraints nullable="false"/>
+            </column>
+            <column name="platform_version" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="scheme_number_id" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="partial_merkle_tree" type="blob">
+                <constraints nullable="true"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="transaction_signature"
+                       columnNames="id"
+                       constraintName="transaction_signature_pkey"/>
+        <createIndex tableName="transaction_signature" indexName="tx_id_idx" unique="false">
+            <column name="tx_id"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>
