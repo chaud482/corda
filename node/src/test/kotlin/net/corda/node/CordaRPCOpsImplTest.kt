@@ -5,7 +5,6 @@ import net.corda.client.rpc.PermissionException
 import net.corda.core.context.AuthServiceId
 import net.corda.core.context.InvocationContext
 import net.corda.core.contracts.Amount
-import net.corda.core.contracts.ComponentGroupEnum
 import net.corda.core.contracts.ContractState
 import net.corda.core.contracts.Issued
 import net.corda.core.crypto.SecureHash
@@ -24,7 +23,6 @@ import net.corda.core.messaging.vaultQueryBy
 import net.corda.core.messaging.vaultTrackBy
 import net.corda.core.node.services.Vault
 import net.corda.core.node.services.queryBy
-import net.corda.core.node.services.queryByJpql
 import net.corda.core.node.services.vault.AttachmentQueryCriteria
 import net.corda.core.node.services.vault.ColumnPredicate
 import net.corda.core.node.services.vault.EqualityComparisonOperator
@@ -42,10 +40,8 @@ import net.corda.node.internal.security.AuthorizingSubject
 import net.corda.node.internal.security.RPCSecurityManagerImpl
 import net.corda.node.services.Permissions.Companion.invokeRpc
 import net.corda.node.services.Permissions.Companion.startFlow
-import net.corda.node.services.persistence.DBTransactionStorage
 import net.corda.node.services.rpc.CURRENT_RPC_CONTEXT
 import net.corda.node.services.rpc.RpcAuthContext
-import net.corda.node.services.vault.VaultSchemaV1
 import net.corda.nodeapi.exceptions.MissingAttachmentException
 import net.corda.nodeapi.exceptions.NonRpcFlowException
 import net.corda.nodeapi.internal.config.User

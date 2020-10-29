@@ -1,34 +1,19 @@
 package net.corda.node.services.persistence
 
 import net.corda.core.concurrent.CordaFuture
-import net.corda.core.contracts.Command
-import net.corda.core.contracts.CommandData
-import net.corda.core.contracts.ComponentGroupEnum
-import net.corda.core.contracts.ContractState
-import net.corda.core.contracts.PrivacySalt
-import net.corda.core.contracts.StateRef
-import net.corda.core.contracts.TimeWindow
-import net.corda.core.contracts.TransactionState
-import net.corda.core.crypto.PartialMerkleTree
 import net.corda.core.crypto.SecureHash
 import net.corda.core.crypto.TransactionSignature
-import net.corda.core.identity.Party
 import net.corda.core.internal.NamedCacheFactory
 import net.corda.core.internal.ThreadBox
 import net.corda.core.internal.VisibleForTesting
 import net.corda.core.internal.bufferUntilSubscribed
 import net.corda.core.internal.concurrent.doneFuture
-import net.corda.core.internal.createComponentGroups
-import net.corda.core.internal.deserialiseCommands
-import net.corda.core.internal.deserialiseComponentGroup
 import net.corda.core.messaging.DataFeed
 import net.corda.core.serialization.*
 import net.corda.core.serialization.internal.effectiveSerializationEnv
 import net.corda.core.toFuture
-import net.corda.core.transactions.ComponentGroup
 import net.corda.core.transactions.CoreTransaction
 import net.corda.core.transactions.SignedTransaction
-import net.corda.core.transactions.WireTransaction
 import net.corda.core.utilities.contextLogger
 import net.corda.core.utilities.debug
 import net.corda.node.CordaClock
@@ -38,16 +23,11 @@ import net.corda.node.utilities.AppendOnlyPersistentMapBase
 import net.corda.node.utilities.WeightBasedAppendOnlyPersistentMap
 import net.corda.nodeapi.internal.persistence.*
 import net.corda.serialization.internal.CordaSerializationEncoding.SNAPPY
-import org.hibernate.Session
-import org.hibernate.annotations.Type
 import rx.Observable
 import rx.subjects.PublishSubject
-import java.io.Serializable
-import java.security.PublicKey
 import java.time.Instant
 import java.util.*
 import javax.persistence.*
-import kotlin.reflect.KClass
 import kotlin.streams.toList
 
 class DBTransactionStorage(private val database: CordaPersistence, cacheFactory: NamedCacheFactory,
@@ -103,158 +83,6 @@ class DBTransactionStorage(private val database: CordaPersistence, cacheFactory:
 
         private class UnexpectedStatusValueException(status: String) : Exception("Found unexpected status value $status in transaction store")
     }
-
-    /**
-     * Holds the data of a Component inside a ComponentGroup, identified by the txId, componentGroupIndex and componentIndex
-     */
-    @Suppress("MagicNumber") // database column width
-    @CordaSerializable
-    @Entity
-    @Table(name = "transaction_component")
-    class DBTransactionComponent(
-            @EmbeddedId
-            val transactionComponentId: DBTransactionComponentId,
-
-            /** The serialized data of this component */
-            @Type(type = "corda-blob")
-//            @Type(type = "serialised-component-data-type")
-            @Column(name = "data", nullable = false)
-//            @Convert(converter = ComponentDataConverter::class)
-            val data: ByteArray,
-
-            @OneToOne(cascade = [CascadeType.ALL])
-            @JoinTable(name = "transaction_component_referenced_by_stateref",
-                    joinColumns = [
-                        JoinColumn(name = "owning_tx_id", referencedColumnName = "tx_id"),
-                        JoinColumn(name = "owning_component_group_index", referencedColumnName = "component_group_index"),
-                        JoinColumn(name = "owning_component_group_leaf_index", referencedColumnName = "component_group_leaf_index")
-                    ])
-            var referenced: DBTransactionComponent? = null
-    ){
-        val deserialisedData: Any
-            get() = deserialiseComponent(this.data, this.transactionComponentId.componentGroupIndex)
-
-
-        fun deserialiseComponent(data: ByteArray, group: ComponentGroupEnum): Any {
-            return data.let {
-                when (group) {
-                    ComponentGroupEnum.INPUTS_GROUP -> it.deserialize<StateRef>()
-                    ComponentGroupEnum.OUTPUTS_GROUP -> it.deserialize<TransactionState<ContractState>>()
-                    ComponentGroupEnum.COMMANDS_GROUP -> it.deserialize<CommandData>()
-                    ComponentGroupEnum.ATTACHMENTS_GROUP -> it.deserialize<SecureHash>()
-                    ComponentGroupEnum.NOTARY_GROUP -> it.deserialize<Party>()
-                    ComponentGroupEnum.TIMEWINDOW_GROUP -> it.deserialize<TimeWindow>()
-                    ComponentGroupEnum.SIGNERS_GROUP -> it.deserialize<List<PublicKey>>()
-                    ComponentGroupEnum.REFERENCES_GROUP -> it.deserialize<StateRef>()
-                    ComponentGroupEnum.PARAMETERS_GROUP -> it.deserialize<SecureHash>()
-                    ComponentGroupEnum.PRIVACY_SALT -> it.deserialize<PrivacySalt>()
-                }
-            }
-        }
-    }
-
-    // A tweaked version of `org.hibernate.type.WrapperBinaryType` that deals with ByteArray (java primitive byte[] type).
-    /*object SerialisedComponentDataType : AbstractSingleColumnStandardBasicType<ByteArray>(VarbinaryTypeDescriptor.INSTANCE, PrimitiveByteArrayTypeDescriptor.INSTANCE) {
-        override fun getRegistrationKeys(): Array<String> {
-            return arrayOf(name, "ByteArray", ByteArray::class.java.name)
-        }
-
-        override fun getName(): String {
-            return "corda-wrapper-binary"
-        }
-    }*/
-
-
-    @Embeddable
-    @CordaSerializable
-    class DBTransactionComponentId(
-            /** The transaction id, root of the Transaction Merkle tree containing the component */
-            @Column(name = "tx_id", length = 64, nullable = false)
-            val txId: String,
-
-            /** Ordinal of ComponentGroupEnum, used as a componentGroup index in the Transaction Merkle tree e.g. input=0/output=1/attachments=3 */
-            @Column(name = "component_group_index", nullable = false)
-            @Enumerated(value = EnumType.STRING)
-            val componentGroupIndex: ComponentGroupEnum,
-
-            /** Component index within ComponentGroup's Merkle tree */
-            @Column(name = "component_group_leaf_index", nullable = false)
-            val componentGroupLeafIndex: Int
-    ): Serializable {
-        override fun equals(other: Any?): Boolean {
-            if(this === other) return true
-            if(other !is DBTransactionComponentId) return false
-            return (other.txId == this.txId
-                    && other.componentGroupIndex == this.componentGroupIndex
-                    && other.componentGroupLeafIndex == this.componentGroupLeafIndex)
-        }
-
-        override fun hashCode(): Int {
-            //todo conal
-            return super.hashCode()
-        }
-    }
-
-    @CordaSerializable
-    @Entity
-    @Table(name = "transaction_signature", indexes = [Index(name = "tx_id_idx", columnList = "tx_id", unique = false)])
-    class DBTransactionSignature(
-            @Id
-            @Column(name = "id", nullable = false)
-            val id: String,
-
-            @Column(name = "tx_id", length = 64, nullable = false)
-            val txId: String,
-
-            @Column(name = "by", length = 1024, nullable = false)
-            val by: PublicKey,
-
-            @Type(type = "corda-blob")
-            @Column(name = "signature", nullable = false)
-            val signature: ByteArray,
-
-            @Column(name = "platform_version", nullable = false)
-            val platformVersion: Int,
-
-            @Column(name = "scheme_number_id", nullable = false)
-            val schemeNumberId: Int,
-
-            @Type(type = "corda-blob")
-            @Column(name = "partial_merkle_tree", nullable = true)
-            val partialMerkleTree: ByteArray?
-    )
-
-    @CordaSerializable
-    @Entity
-    @Table(name = "transaction_command")
-    class DBTransactionCommand(
-            @Id
-            @Column(name = "id", nullable = false)
-            val id: String,
-
-            @Column(name = "tx_id", length = 64, nullable = false, unique = false)
-            val txId: String,
-
-            @Type(type = "corda-blob")
-            @Column(name = "command_data", nullable = false)
-            val commandData: ByteArray,
-
-            @ElementCollection(targetClass = PublicKey::class, fetch = FetchType.EAGER)
-            @Column(name = "signer", nullable = false)
-            @CollectionTable(name = "transaction_command_signer", joinColumns = [(JoinColumn(name = "command_id", referencedColumnName = "id"))])
-            var signers: List<PublicKey>? = null
-    ): Serializable
-
-/*    @Converter
-    class ComponentDataConverter : AttributeConverter<Any, ByteArray> {
-        override fun convertToDatabaseColumn(attribute: TransactionStatus): ByteArray {
-            return attribute.toDatabaseValue()
-        }
-
-        override fun convertToEntityAttribute(dbData: ByteArray): TransactionStatus {
-            return TransactionStatus.fromDatabaseValue(dbData)
-        }
-    }*/
 
     @Converter
     class TransactionStatusConverter : AttributeConverter<TransactionStatus, String> {
@@ -344,145 +172,11 @@ class DBTransactionStorage(private val database: CordaPersistence, cacheFactory:
                 if (addedOrUpdated) {
                     logger.debug { "Transaction ${transaction.id} has been recorded as verified" }
                     onNewTx(transaction)
-                    storeTransactionComponents(transaction)
                 } else {
                     logger.debug { "Transaction ${transaction.id} is already recorded as verified, so no need to re-record" }
                     false
                 }
             }
-        }
-    }
-
-    private fun storeTransactionComponents(transaction: SignedTransaction): Boolean {
-        database.transaction {
-            txStorage.locked {
-                val session = currentDBSession()
-
-                transaction.sigs.map {
-                    session.save(DBTransactionSignature(UUID.randomUUID().toString(), transaction.id.toString(), it.by, it.bytes,
-                            it.signatureMetadata.platformVersion, it.signatureMetadata.schemeNumberID, null ))}
-                // todo conal - partialMerkleTree
-//                    /*if(it.partialMerkleTree != null){ it.partialMerkleTree!.serialize().bytes} else {null}*/null)) }
-
-                session.save(DBTransactionComponent(DBTransactionComponentId(transaction.id.toString(), ComponentGroupEnum.PRIVACY_SALT, 0),
-                        transaction.tx.privacySalt.serialize().bytes))
-
-                transaction.tx.componentGroups.let {
-                    deserialiseInputGroup(it, session, transaction)
-                    deserialiseComponentGroupAndStoreComponents(it, session, transaction, TransactionState::class, ComponentGroupEnum.OUTPUTS_GROUP)
-                    deserialiseComponentGroupAndStoreCommands(it, session, transaction) // storing list of Command instead of individual CommandData and Signers
-                    deserialiseComponentGroupAndStoreComponents(it, session, transaction, SecureHash::class, ComponentGroupEnum.ATTACHMENTS_GROUP)
-                    deserialiseComponentGroupAndStoreComponents(it, session, transaction, Party::class, ComponentGroupEnum.NOTARY_GROUP)
-                    deserialiseComponentGroupAndStoreComponents(it, session, transaction, TimeWindow::class, ComponentGroupEnum.TIMEWINDOW_GROUP)
-                    deserialiseComponentGroupAndStoreComponents(it, session, transaction, StateRef::class, ComponentGroupEnum.REFERENCES_GROUP)
-                    deserialiseComponentGroupAndStoreComponents(it, session, transaction, SecureHash::class, ComponentGroupEnum.PARAMETERS_GROUP)
-                }
-            }
-        }
-        return true
-    }
-
-    private fun deserialiseInputGroup(componentGroups: List<ComponentGroup>, session: Session, transaction: SignedTransaction) {
-        val listOfStateRefs = deserialiseComponentGroup(componentGroups, StateRef::class, ComponentGroupEnum.INPUTS_GROUP, forceDeserialize = true)
-        listOfStateRefs.forEachIndexed { index, stateRef ->
-            val referencedDbTransactionComponent = session.load(DBTransactionComponent::class.java,
-                    DBTransactionComponentId(stateRef.txhash.toString(), ComponentGroupEnum.OUTPUTS_GROUP, stateRef.index))
-            session.save(DBTransactionComponent(DBTransactionComponentId(transaction.id.toString(), ComponentGroupEnum.INPUTS_GROUP, index),
-                    stateRef.serialize().bytes, referencedDbTransactionComponent))
-        }
-    }
-
-    private fun <T : Any> deserialiseComponentGroupAndStoreComponents(componentGroups: List<ComponentGroup>, session: Session,
-                                                                    transaction: SignedTransaction, kClass: KClass<T>,
-                                                                    componentGroupEnum: ComponentGroupEnum) {
-        val listOfDeserialisedComponents = deserialiseComponentGroup(componentGroups, kClass, componentGroupEnum, forceDeserialize = true)
-        listOfDeserialisedComponents.forEachIndexed { index, component ->
-            session.save(DBTransactionComponent(
-                    DBTransactionComponentId(transaction.id.toString(), componentGroupEnum, index),
-                    component.serialize().bytes))
-        }
-    }
-
-    private fun deserialiseComponentGroupAndStoreCommands(it: List<ComponentGroup>, session: Session, transaction: SignedTransaction) {
-        val listOfCommands = deserialiseCommands(it, forceDeserialize = true)
-        listOfCommands.forEach {
-            val dbTransactionCommand = DBTransactionCommand(id = UUID.randomUUID().toString(), txId = transaction.id.toString(),
-                    commandData = it.value.serialize().bytes, signers = it.signers)
-            session.save(dbTransactionCommand)
-        }
-    }
-
-    fun convertTransactionComponentsToWireTransaction(transactionComponents: List<DBTransactionComponent>): WireTransaction {
-        return WireTransaction(createComponentGroups(
-                inputs = transactionComponents
-                        .filter { it.transactionComponentId.componentGroupIndex == ComponentGroupEnum.INPUTS_GROUP }
-                        .map { deserialiseComponent(it) as StateRef }
-                        .toList(),
-                outputs = transactionComponents
-                        .filter { it.transactionComponentId.componentGroupIndex == ComponentGroupEnum.OUTPUTS_GROUP }
-                        .map { deserialiseComponent(it) as TransactionState<ContractState> }
-                        .toList(),
-                commands = transactionComponents
-                        .filter { it.transactionComponentId.componentGroupIndex == ComponentGroupEnum.COMMANDS_GROUP }
-                        .map { deserialiseComponent(it) as Command<*> }
-                        .toList(),
-                attachments = transactionComponents
-                        .filter { it.transactionComponentId.componentGroupIndex == ComponentGroupEnum.ATTACHMENTS_GROUP }
-                        .map { deserialiseComponent(it) as SecureHash }
-                        .toList(),
-                notary = transactionComponents
-                        .filter { it.transactionComponentId.componentGroupIndex == ComponentGroupEnum.NOTARY_GROUP }
-                        .map { deserialiseComponent(it) as Party }.getOrNull(0),
-                timeWindow = transactionComponents
-                        .filter { it.transactionComponentId.componentGroupIndex == ComponentGroupEnum.TIMEWINDOW_GROUP }
-                        .map { deserialiseComponent(it) as TimeWindow }.getOrNull(0),
-                references = transactionComponents
-                        .filter { it.transactionComponentId.componentGroupIndex == ComponentGroupEnum.REFERENCES_GROUP }
-                        .map { deserialiseComponent(it) as StateRef }
-                        .toList(),
-                networkParametersHash = null //todo conal
-        ))
-    }
-
-    fun deserialiseComponent(component: DBTransactionComponent): Any {
-        return component.data.let {
-            when (component.transactionComponentId.componentGroupIndex) {
-                ComponentGroupEnum.INPUTS_GROUP -> it.deserialize<StateRef>()
-                ComponentGroupEnum.OUTPUTS_GROUP -> it.deserialize<TransactionState<ContractState>>()
-                ComponentGroupEnum.COMMANDS_GROUP -> it.deserialize<CommandData>()
-                ComponentGroupEnum.ATTACHMENTS_GROUP -> it.deserialize<SecureHash>()
-                ComponentGroupEnum.NOTARY_GROUP -> it.deserialize<Party>()
-                ComponentGroupEnum.TIMEWINDOW_GROUP -> it.deserialize<TimeWindow>()
-                ComponentGroupEnum.SIGNERS_GROUP -> it.deserialize<List<PublicKey>>()
-                ComponentGroupEnum.REFERENCES_GROUP -> it.deserialize<StateRef>()
-                ComponentGroupEnum.PARAMETERS_GROUP -> it.deserialize<SecureHash>()
-                ComponentGroupEnum.PRIVACY_SALT -> it.deserialize<PrivacySalt>()
-            }
-        }
-    }
-
-    fun fetchTransactionComponents(txId: SecureHash): List<DBTransactionComponent> {
-        return database.transaction {
-            //todo conal - convert to use jpa criteria?
-            session.createQuery(
-                    "from ${DBTransactionComponent::class.java.name} where tx_id = :txId", DBTransactionComponent::class.java)
-                    .setParameter("txId", txId.toString())
-                    .resultList
-        }
-    }
-
-    fun fetchSingleTransactionComponent(txId: SecureHash, componentGroup: ComponentGroupEnum, componentIndex: Int): DBTransactionComponent {
-        return database.transaction {
-            //todo conal - convert to use jpa criteria?
-            var singleResult: DBTransactionComponent = session.createQuery(
-                    "from ${DBTransactionComponent::class.java.name} " +
-                            "where tx_id = :txId and component_group_index = :componentGroupIndex and component_group_leaf_index = :componentIndex",
-                    DBTransactionComponent::class.java)
-                    .setParameter("txId", txId.toString())
-                    .setParameter("componentGroupIndex", componentGroup.name)
-                    .setParameter("componentIndex", componentIndex)
-                    .singleResult
-            singleResult
         }
     }
 
@@ -575,7 +269,7 @@ class DBTransactionStorage(private val database: CordaPersistence, cacheFactory:
     // Cache value type to just store the immutable bits of a signed transaction plus conversion helpers
     private data class TxCacheValue(
             val txBits: SerializedBytes<CoreTransaction>,
-            val sigs: List<net.corda.core.crypto.TransactionSignature>,
+            val sigs: List<TransactionSignature>,
             val status: TransactionStatus
     ) {
         constructor(stx: SignedTransaction, status: TransactionStatus) : this(
