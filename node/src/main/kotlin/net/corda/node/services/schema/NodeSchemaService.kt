@@ -48,7 +48,6 @@ class NodeSchemaService(private val extraSchemas: Set<MappedSchema> = emptySet()
                     NodeAttachmentService.DBAttachment::class.java,
                     P2PMessageDeduplicator.ProcessedMessage::class.java,
                     PersistentIdentityService.PersistentPublicKeyHashToCertificate::class.java,
-                    PersistentIdentityService.PersistentPartyToPublicKeyHash::class.java,
                     PersistentIdentityService.PersistentPublicKeyHashToParty::class.java,
                     PersistentIdentityService.PersistentHashToPublicKey::class.java,
                     ContractUpgradeServiceImpl.DBContractUpgrade::class.java,
